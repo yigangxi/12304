@@ -8,11 +8,6 @@
 #include <string.h>
 #include <stdlib.h>
 
-struct packet {
-	int len;
-	char buf[BUFSIZ];
-};
-
 ssize_t readn(int fd,void *buf,size_t count){
 	size_t nleft = count;
 	ssize_t nread;
@@ -49,33 +44,61 @@ ssize_t writen(int fd,const void *buf,size_t count){
 	return count;
 }
 
-void do_server(int client_sockfd){
-	struct packet recvbuf;
-	int n;
+ssize_t recv_peek(int sockfd,void *buf,size_t len){
 	while(1){
-		memset(&recvbuf,0,sizeof(recvbuf));
-		int ret = readn(client_sockfd,&recvbuf.len,4);
+		int ret = recv(sockfd,buf,len,MSG_PEEK);
+		if(ret == -1 && errno == EINTR)
+			continue;
+		return ret;
+	}
+}
+
+ssize_t readline(int sockfd,void *buf,size_t maxline){
+	int ret,nread;
+	char *bufp = (char *)buf;
+	int nleft = maxline;
+	while(1){
+		ret = recv_peek(sockfd,bufp,nleft);
+		if(ret < 0)
+			return ret;
+		else if(ret == 0)
+			return ret;
+		nread = ret;
+		int i;
+		for(i=0; i < nread; i++){
+			if(bufp[i] == '\n'){
+				ret = readn(sockfd,bufp,i+1);
+				if(ret != i+1)
+					exit(0);
+				return ret;
+			}
+		}
+		if(nread > nleft)
+			exit(0);
+		nleft -= nread;
+		ret = readn(sockfd,bufp,nread);
+		if(ret != nread)
+			exit(0);
+		bufp += nread;
+	}
+	return -1;
+}
+
+void do_server(int client_sockfd){
+	char recvbuf[BUFSIZ];
+	while(1){
+		memset(recvbuf,0,sizeof(recvbuf));
+		int ret = readline(client_sockfd,recvbuf,BUFSIZ);
 		if(ret ==  -1){
-			perror("read error");
+			perror("readline error");
 			return;
 		}
-		else if(ret < 4){
+		else if(ret == 0){
 		    printf("client close\n");
-			break;
+			exit(0);
 	    }
-		n = ntohl(recvbuf.len);
-		ret = readn(client_sockfd,recvbuf.buf,n);
-		if(ret ==  -1){
-		     perror("read error");
-		     return;
-		}   
-		else if(ret < n){
-		     printf("client close\n");
-		     break;
-		}
-		n = ntohl(recvbuf.len);
-		fputs(recvbuf.buf,stdout);
-		writen(client_sockfd,&recvbuf,4+n);
+		fputs(recvbuf,stdout);
+		writen(client_sockfd,recvbuf,strlen(recvbuf));
 	}
 }
 
@@ -131,7 +154,6 @@ int main(int argc, char *argv[]){
 		if(pid == 0){
 			close(server_sockfd);
 			do_server(client_sockfd);
-			exit(1);
 		}
 		else
 			close(client_sockfd);
