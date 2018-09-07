@@ -8,11 +8,6 @@
 #include <errno.h>
 #include <unistd.h>
 
-struct packet{
-	int len;
-	char buf[BUFSIZ];
-};
-
 ssize_t readn(int fd, void *buf, size_t count){
 	size_t nleft = count;
 	ssize_t nread;
@@ -50,6 +45,45 @@ ssize_t writen(int fd, const void *buf, size_t count){
 	return count;
 }
 
+ssize_t rev_peek(int sockfd, void *buf, size_t len){
+	while(1){
+		int ret = recv(sockfd,buf,len,MSG_PEEK);
+		if(ret == -1 && errno == EINTR)
+			continue;
+		return ret;
+	}
+}
+
+ssize_t readline(int sockfd, void *buf,size_t maxline){
+	int ret,nread,nleft = maxline;
+	char *bufp = (char *)buf;
+	while(1){
+		ret =rev_peek(sockfd,bufp,nleft);
+		if(ret < 0)
+			return ret;
+		else if(ret == 0)
+			return ret;
+		nread =ret;
+		int i;
+		for(i = 0; i < nread; i++){
+			if(bufp[i] == '\n'){
+				ret = readn(sockfd,buf,i+1);
+				if(ret != i+1)
+					exit(0);
+				return ret;
+			}
+		}
+		if(nread > nleft)
+			exit(0);
+		nleft -= nread;
+		ret = readn(sockfd,bufp,nread);
+		if(ret != nread)
+			exit(0);
+		bufp += nread;
+	}
+	return -1;
+}
+
 int main(int argc, char *argv[]){
 	//the first,创建套接字
 	int client_sockfd;
@@ -70,39 +104,24 @@ int main(int argc, char *argv[]){
 	printf("connected to server\n");
 
 	//the third,数据交互
-	struct packet recvbuf;
-	struct packet sendbuf;
-	memset(&recvbuf,0,sizeof(recvbuf));
-	memset(&sendbuf,0,sizeof(sendbuf));
-	int n;
-	while(fgets(sendbuf.buf,sizeof(sendbuf.buf),stdin) != NULL){
-		n = strlen(sendbuf.buf);
-		sendbuf.len = htonl(n);
-		writen(client_sockfd,&sendbuf,4+n);
+	char recvbuf[BUFSIZ] = {0};
+	char sendbuf[BUFSIZ] = {0};
+	while(fgets(sendbuf,sizeof(sendbuf),stdin) != NULL){
+		writen(client_sockfd,sendbuf,strlen(sendbuf));
 
-		int ret = readn(client_sockfd,&recvbuf.len,4);
+		int ret = readline(client_sockfd,recvbuf,sizeof(recvbuf));
 		if(ret ==  -1){
-			perror("read error");
+			perror("readline error");
 			return 1;
 		}
-		else if(ret < 4){
-			printf("client close\n");
-			break;
-		}
-		n = ntohl(recvbuf.len);
-		ret = readn(client_sockfd,recvbuf.buf,n);
-		if(ret ==  -1){
-			perror("read error");
-			return 1;
-		}
-		else if(ret < n){
+		else if(ret == 0){
 			printf("client close\n");
 			break;
 		}
 
-		fputs(recvbuf.buf,stdout);
-		memset(&recvbuf,0,sizeof(recvbuf));
-		memset(&sendbuf,0,sizeof(sendbuf));
+		fputs(recvbuf,stdout);
+		memset(recvbuf,0,sizeof(recvbuf));
+		memset(sendbuf,0,sizeof(sendbuf));
 	}
 
 	//the forth,关闭套接字
