@@ -8,15 +8,57 @@
 #include <errno.h>
 #include <unistd.h>
 
+struct packet{
+	int len;
+	char buf[BUFSIZ];
+};
+
+ssize_t readn(int fd, void *buf, size_t count){
+	size_t nleft = count;
+	ssize_t nread;
+	char *bufp = (char *)buf;
+	while(nleft > 0){
+		if((nread = read(fd,bufp,nleft)) < 0){
+			if(errno == EINTR)
+				continue;
+			return 1;
+		}
+		else if(nread  == 0){
+			break;
+		}
+		bufp += nread;
+		nleft -=  nread;
+	}
+	return count;
+}
+
+ssize_t writen(int fd, const void *buf, size_t count){
+	size_t nleft =  count;
+	ssize_t nwrite;
+	char *bufp = (char *)buf;
+	while(nleft > 0){
+		if((nwrite = write(fd,bufp,nleft)) < 0){
+			if(errno == EINTR)
+				continue;
+			return 1;
+		}
+		else if(nwrite == 0)
+			continue;
+		bufp += nwrite;
+		nleft -= nwrite;
+	}
+	return count;
+}
+
 int main(int argc, char *argv[]){
-	//the first,build taojiezi
+	//the first,创建套接字
 	int client_sockfd;
 	if((client_sockfd = socket(PF_INET,SOCK_STREAM,0)) < 0){
 		perror("socket error");
 		return -1;
 	}
 
-	//the second,bindtaojiezi
+	//the second,绑定套接字
 	struct sockaddr_in client_addr;
 	client_addr.sin_family = AF_INET;
 	client_addr.sin_addr.s_addr = inet_addr("192.168.10.128");
@@ -27,17 +69,43 @@ int main(int argc, char *argv[]){
 	}
 	printf("connected to server\n");
 
-	//the third,shujujiaohu
-	char sendbuf[BUFSIZ];
-	char recvbuf[BUFSIZ];
-	while(fgets(sendbuf,sizeof(sendbuf),stdin) != NULL){
-		write(client_sockfd,sendbuf,strlen(sendbuf));
-		read(client_sockfd,recvbuf,sizeof(recvbuf));
-		fputs(recvbuf,stdout);
-		memset(recvbuf,0,sizeof(recvbuf));
+	//the third,数据交互
+	struct packet recvbuf;
+	struct packet sendbuf;
+	memset(&recvbuf,0,sizeof(recvbuf));
+	memset(&sendbuf,0,sizeof(sendbuf));
+	int n;
+	while(fgets(sendbuf.buf,sizeof(sendbuf.buf),stdin) != NULL){
+		n = strlen(sendbuf.buf);
+		sendbuf.len = htonl(n);
+		writen(client_sockfd,&sendbuf,4+n);
+
+		int ret = readn(client_sockfd,&recvbuf.len,4);
+		if(ret ==  -1){
+			perror("read error");
+			return 1;
+		}
+		else if(ret < 4){
+			printf("client close\n");
+			break;
+		}
+		n = ntohl(recvbuf.len);
+		ret = readn(client_sockfd,recvbuf.buf,n);
+		if(ret ==  -1){
+			perror("read error");
+			return 1;
+		}
+		else if(ret < n){
+			printf("client close\n");
+			break;
+		}
+
+		fputs(recvbuf.buf,stdout);
+		memset(&recvbuf,0,sizeof(recvbuf));
+		memset(&sendbuf,0,sizeof(sendbuf));
 	}
 
-	//the forth,close taojiezi
+	//the forth,关闭套接字
 	close(client_sockfd);
 	
 	return 0;
